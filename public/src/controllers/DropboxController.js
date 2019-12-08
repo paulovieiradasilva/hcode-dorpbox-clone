@@ -48,11 +48,11 @@ class DropboxController {
 
     }
 
-    removeFolderTask(ref, name, key) {
+    removeFolderTask(path, name, key) {
 
         return new Promise((resolve, reject) => {
 
-            let folderRef = this.getFirebaseRef(ref + '/' + name);
+            let folderRef = this.getFirebaseRef(path + '/' + name);
 
             folderRef.on('value', snapshot => {
 
@@ -67,7 +67,7 @@ class DropboxController {
 
                         if (data.type === 'folder') {
 
-                            this.removeFolderTask(ref + '/' + name, data.name).then(() => {
+                            this.removeFolderTask(path + '/' + name, data.name).then(() => {
 
                                 resolve({
                                     fields: {
@@ -75,13 +75,15 @@ class DropboxController {
                                     }
                                 });
 
-                            }).catch(err => {
-                                reject(err);
+                            }).catch(error => {
+
+                                reject(error);
+
                             });
 
                         } else if (data.type) {
 
-                            this.removeFile(ref + '/' + name, data.name).then(() => {
+                            this.removeFile(path + '/' + name, data.name).then(() => {
 
                                 resolve({
                                     fields: {
@@ -89,8 +91,10 @@ class DropboxController {
                                     }
                                 });
 
-                            }).catch(err => {
-                                reject(err);
+                            }).catch(error => {
+
+                                reject(error);
+
                             });
 
                         }
@@ -127,14 +131,8 @@ class DropboxController {
                     this.removeFolderTask(this.currentFolder.join('/'), file.name, key).then(() => {
 
                         resolve({
-                            fields: {
-                                key
-                            }
+                            fields: { key }
                         });
-
-                    }).catch(err => {
-
-                        reject(err);
 
                     });
 
@@ -143,24 +141,28 @@ class DropboxController {
                     this.removeFile(this.currentFolder.join('/'), file.name).then(() => {
 
                         resolve({
-                            fields: {
-                                key
-                            }
+                            fields: { key }
                         });
-
-                    }).catch(err => {
-
-                        reject(err);
 
                     });
 
                 }
+
+
 
             }));
 
         });
 
         return Promise.all(promises);
+
+    }
+
+    removeFile(path, name) {
+
+        let fileRef = firebase.storage().ref(path).child(name);
+
+        return fileRef.delete();
 
     }
 
@@ -189,8 +191,6 @@ class DropboxController {
             this.removeTask().then(result => {
 
                 result.forEach(item => {
-
-                    console.log(item);
 
                     if (item.fields.key) {
                         this.getFirebaseRef().child(item.fields.key).remove();
@@ -261,9 +261,14 @@ class DropboxController {
 
             this.uploadTask(event.target.files).then(data => {
 
-                data.forEach(res => {
+                data.forEach(item => {
 
-                    this.getFirebaseRef().push().set(res.files['input-file']);
+                    this.getFirebaseRef().push().set({
+                        name: item.name,
+                        type: item.contentType,
+                        path: item.customMetadata.downloadURL,
+                        size: item.size
+                    });
 
                 });
 
@@ -297,59 +302,45 @@ class DropboxController {
 
     }
 
-    ajax(method = 'GET', url, formData = new FormData(), onprogress = function() {}, onloadstart = function() {}) {
-
-        return new Promise((resolve, reject) => {
-
-            let ajax = new XMLHttpRequest();
-
-            ajax.open(method, url);
-
-            ajax.onload = () => {
-
-                try {
-
-                    resolve(JSON.parse(ajax.responseText));
-
-                } catch (error) {
-
-                    reject(error);
-
-                }
-
-            };
-
-            ajax.onerror = event => {
-
-                reject(event);
-
-            };
-
-            ajax.upload.onprogress = onprogress;
-
-            onloadstart();
-
-            ajax.send(formData);
-
-        });
-
-    }
-
     uploadTask(files) {
 
         let promises = [];
 
         [...files].forEach(file => {
 
-            let formData = new FormData();
+            promises.push(new Promise((resolve, reject) => {
 
-            formData.append('input-file', file);
+                let fileRef = firebase.storage().ref(this.currentFolder.join('/')).child(file.name);
 
-            promises.push(
-                this.ajax('POST', '/upload', formData, () => {
-                    this.uploadProgress(event, file);
-                }, () => this.startUploadTime = Date.now())
-            );
+                let task = fileRef.put(file);
+
+                task.on('state_changed', snapshot => {
+
+                    this.uploadProgress({ loaded: snapshot.bytesTransferred, total: snapshot.totalBytes }, file);
+
+                }, error => {
+
+                    reject(error);
+
+                }, () => {
+
+                    task.snapshot.ref.getDownloadURL().then(downloadURL => {
+
+                        task.snapshot.ref.updateMetadata({ customMetadata: { downloadURL } }).then(metadata => {
+
+                            resolve(metadata);
+
+                        }).catch(error => {
+
+                            reject(error);
+
+                        });
+
+                    });
+
+                });
+
+            }));
 
         });
 
@@ -678,6 +669,7 @@ class DropboxController {
 
     }
 
+    /** INIT EVENTS LIST */
     initEventsLi(li) {
 
         li.addEventListener('dblclick', event => {
@@ -692,7 +684,7 @@ class DropboxController {
                     break;
 
                 default:
-                    window.open('/file?path=' + file.path);
+                    window.open(file.path);
 
             }
 
